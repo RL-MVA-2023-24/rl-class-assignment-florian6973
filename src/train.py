@@ -75,7 +75,7 @@ class ProjectAgent:
         
         return DQN
             
-    def collect_samples(self, env, horizon, disable_tqdm=False, print_done_states=False):
+    def collect_samples(self, env, horizon, random_rate=0, disable_tqdm=False, print_reset_states=False):
         s, _ = env.reset()
         #dataset = []
         S = []
@@ -84,7 +84,12 @@ class ProjectAgent:
         S2 = []
         D = []
         for _ in tqdm(range(horizon), disable=disable_tqdm):
-            a = env.action_space.sample()
+            # a = env.action_space.sample() # not impacted by SEED CAREFUL
+            if np.random.rand() < random_rate:
+                a = np.random.randint(0, env.action_space.n)
+            else:
+                a = self.act(s)
+
             s2, r, done, trunc, _ = env.step(a)
             #dataset.append((s,a,r,s2,done,trunc))
             S.append(s)
@@ -94,8 +99,8 @@ class ProjectAgent:
             D.append(done)
             if done or trunc:
                 s, _ = env.reset()
-                if done and print_done_states:
-                    print("done!")
+                if print_reset_states:
+                    print("Resetting state to", s)
             else:
                 s = s2
         S = np.array(S)
@@ -260,7 +265,7 @@ class ProjectAgent:
                     Q2[:,a2] = Q.predict(S2A2)
                 max_Q2 = np.max(Q2,axis=1)
                 value = R + gamma*(1-D)*max_Q2 # d is one is the state is terminal
-            Q = ExtraTreesRegressor(random_state=42, n_estimators=50)
+            Q = ExtraTreesRegressor(n_estimators=50, n_jobs=-1)
             Q.fit(SA,value)
         return Q
 
@@ -269,8 +274,8 @@ class ProjectAgent:
     # actions: 0, 1, 2, 3 (no drug, first, second, both)
     def act(self, observation, use_random=False):
         # print(observation)
-        # if use_random:
-        #     return np.random.choice(4)
+        if use_random:
+            return np.random.choice(4)
         # return self.greedy_action(self.model, observation)
         Qsa = []
         nb_actions = 4
@@ -292,7 +297,11 @@ class ProjectAgent:
         # torch.save(self.model.state_dict(), path)
 
     def load(self):
-        with open('Q.pkl', 'rb') as f:
+        path = 'Q.pkl'
+        if not os.path.exists(path):
+            print("No model to load")
+            return
+        with open(path, 'rb') as f:
             self.Q = pickle.load(f)
         # self.model.load_state_dict(torch.load('weights.pkl'))
 
@@ -302,26 +311,35 @@ if __name__ == "__main__":
     # find why not deterministic
     
     env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=1000 # 200
+        env=HIVPatient(domain_randomization=False), max_episode_steps=200 # 200
     )  # The time wrapper limits the number of steps in an episode at 200.
     # Now is the floor is yours to implement the agent and train it.
 
 
     # Initialization of the agent. Replace DummyAgent with your custom agent implementation.
     agent = ProjectAgent()
+    agent.load()
 
     # # training the agent
     # 400 times, 60 000 samples
-    nb_iter = 100
-    S, A, R, S2, D = agent.collect_samples(env, 200) # reset after 200 iterations?
-    # import pickle
-    # with open('data.pkl', 'wb') as f:
-    #     pickle.dump((S, A, R, S2, D), f)
-    # with open('data.pkl', 'rb') as f:
-    #     S, A, R, S2, D = pickle.load(f)
-    Q = agent.train(S, A, R, S2, D, nb_iter, 4, 1) # mean to compute reward
-    agent.Q = Q
-    agent.save(None)
+
+    nb_iter_fitting = 400
+    nb_sample_per_it = 6000
+    for iteration in range(10):
+        random_rate = 1 if iteration == 0 else 0.15 
+        S, A, R, S2, D = agent.collect_samples(env, nb_sample_per_it, random_rate=random_rate, print_reset_states=True) # reset after 200 iterations?
+        # import pickle
+        with open('data.pkl', 'wb') as f:
+            pickle.dump((S, A, R, S2, D), f)
+        with open('data.pkl', 'rb') as f:
+            S, A, R, S2, D = pickle.load(f)
+        Q = agent.train(S, A, R, S2, D, nb_iter_fitting, 4, 1) # mean to compute reward
+        agent.Q = Q
+        agent.save(None)
+        agent.load()
+
+        score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
+        print(score_agent)
 
     # # memory = agent.build_buffer(env, nb_samples=2e2, replay_buffer_size=1e2)
     # print("Building network...")
@@ -335,7 +353,7 @@ if __name__ == "__main__":
 
     # print("Evaluating agent...")
     # agent.save(None)
-    import matplotlib.pyplot as plt
+    # import matplotlib.pyplot as plt
     # plt.plot(ep_length, label="training episode length")
     # plt.plot(tot_rewards, label="MC eval of total reward")
     # plt.legend()
@@ -357,7 +375,4 @@ if __name__ == "__main__":
     # plt.plot(Vs0)
     # plt.show()
 
-    agent.load()
-
-    score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
-    print(score_agent)
+    
