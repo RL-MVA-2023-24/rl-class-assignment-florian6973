@@ -1,5 +1,5 @@
 from gymnasium.wrappers import TimeLimit
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import ExtraTreesRegressor
 from env_hiv import HIVPatient
 import numpy as np
 from tqdm import tqdm
@@ -10,6 +10,8 @@ import pickle
 from evaluate import evaluate_HIV
 import torch.nn as nn
 from copy import deepcopy
+
+import gc
 
 class ReplayBuffer:
     def __init__(self, capacity, device):
@@ -245,8 +247,8 @@ class ProjectAgent:
 
     def train(self, S, A, R, S2, D, iterations, nb_actions, gamma, disable_tqdm=False):
         nb_samples = S.shape[0]
-        Qfunctions = []
         SA = np.append(S,A,axis=1)
+        # a  = two boolean instead of a number?
         for iter in tqdm(range(iterations), disable=disable_tqdm):
             if iter==0:
                 value=R.copy()
@@ -255,51 +257,52 @@ class ProjectAgent:
                 for a2 in range(nb_actions):
                     A2 = a2*np.ones((S.shape[0],1))
                     S2A2 = np.append(S2,A2,axis=1)
-                    Q2[:,a2] = Qfunctions[-1].predict(S2A2)
+                    Q2[:,a2] = Q.predict(S2A2)
                 max_Q2 = np.max(Q2,axis=1)
                 value = R + gamma*(1-D)*max_Q2 # d is one is the state is terminal
-            Q = RandomForestRegressor()
+            Q = ExtraTreesRegressor(random_state=42, n_estimators=50)
             Q.fit(SA,value)
-            Qfunctions.append(Q)
-        return Qfunctions
+        return Q
 
     # finite number of actions but continuous observation space
     # observations: T1, T1star, T2, T2star, V, E
     # actions: 0, 1, 2, 3 (no drug, first, second, both)
     def act(self, observation, use_random=False):
         # print(observation)
-        if use_random:
-            return np.random.choice(4)
-        return self.greedy_action(self.model, observation)
-        # Qsa = []
-        # nb_actions = 4
-        # for a in range(nb_actions):
-        #     sa = np.append(observation,a).reshape(1, -1)
-        #     Qsa.append(self.Q.predict(sa))
-        # policy = np.argmax(Qsa)
-        # # print(policy)
-        # return policy
+        # if use_random:
+        #     return np.random.choice(4)
+        # return self.greedy_action(self.model, observation)
+        Qsa = []
+        nb_actions = 4
+        for a in range(nb_actions):
+            sa = np.append(observation,a).reshape(1, -1)
+            Qsa.append(self.Q.predict(sa))
+        policy = np.argmax(Qsa)
+        # print(policy)
+        return policy
         # return 0
 
     def save(self, path):
-        # if path is None:
-        #     path = 'Q.pkl'
-        # with open(path, 'wb') as f:
-        #     pickle.dump(self.Q, f)
         if path is None:
-            path = 'weights.pkl'
-        torch.save(self.model.state_dict(), path)
+            path = 'Q.pkl'
+        with open(path, 'wb') as f:
+            pickle.dump(self.Q, f)
+        # if path is None:
+        #     path = 'weights.pkl'
+        # torch.save(self.model.state_dict(), path)
 
     def load(self):
-        # with open('Q.pkl', 'rb') as f:
-        #     self.Q = pickle.load(f)
-        self.model.load_state_dict(torch.load('weights.pkl'))
+        with open('Q.pkl', 'rb') as f:
+            self.Q = pickle.load(f)
+        # self.model.load_state_dict(torch.load('weights.pkl'))
 
 if __name__ == "__main__":
     seed_everything(seed=42)
+
+    # find why not deterministic
     
     env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=200
+        env=HIVPatient(domain_randomization=False), max_episode_steps=1000 # 200
     )  # The time wrapper limits the number of steps in an episode at 200.
     # Now is the floor is yours to implement the agent and train it.
 
@@ -308,33 +311,51 @@ if __name__ == "__main__":
     agent = ProjectAgent()
 
     # # training the agent
-    # S, A, R, S2, D = agent.collect_samples(env, 2000)
-    # Qfunctions = agent.train(S, A, R, S2, D, 100, 4, 0.9)
-    # agent.Q = Qfunctions[-1]
-    # agent.save('Q.pkl')
-
-    # memory = agent.build_buffer(env, nb_samples=2e2, replay_buffer_size=1e2)
-    print("Building network...")
-    network = agent.build_network(env, nb_neurons=50)
-    print("Initializing training...")
-    agent.init_training(config={'nb_actions': env.action_space.n,
-                                'buffer_size': 1000000,
-                                }, model=network)
-    print("Training network...")
-    ep_length, disc_rewards, tot_rewards, V0 = agent.train_network(env, max_episode=2)
-
-    print("Evaluating agent...")
+    # 400 times, 60 000 samples
+    nb_iter = 100
+    S, A, R, S2, D = agent.collect_samples(env, 200) # reset after 200 iterations?
+    # import pickle
+    # with open('data.pkl', 'wb') as f:
+    #     pickle.dump((S, A, R, S2, D), f)
+    # with open('data.pkl', 'rb') as f:
+    #     S, A, R, S2, D = pickle.load(f)
+    Q = agent.train(S, A, R, S2, D, nb_iter, 4, 1) # mean to compute reward
+    agent.Q = Q
     agent.save(None)
+
+    # # memory = agent.build_buffer(env, nb_samples=2e2, replay_buffer_size=1e2)
+    # print("Building network...")
+    # network = agent.build_network(env, nb_neurons=50)
+    # print("Initializing training...")
+    # agent.init_training(config={'nb_actions': env.action_space.n,
+    #                             'buffer_size': 1000000,
+    #                             }, model=network)
+    # print("Training network...")
+    # ep_length, disc_rewards, tot_rewards, V0 = agent.train_network(env, max_episode=2)
+
+    # print("Evaluating agent...")
+    # agent.save(None)
     import matplotlib.pyplot as plt
-    plt.plot(ep_length, label="training episode length")
-    plt.plot(tot_rewards, label="MC eval of total reward")
-    plt.legend()
-    plt.show()
-    plt.figure()
-    plt.plot(disc_rewards, label="MC eval of discounted reward")
-    plt.plot(V0, label="average $max_a Q(s_0)$")
-    plt.legend()
-    plt.show()
+    # plt.plot(ep_length, label="training episode length")
+    # plt.plot(tot_rewards, label="MC eval of total reward")
+    # plt.legend()
+    # plt.show()
+    # plt.figure()
+    # plt.plot(disc_rewards, label="MC eval of discounted reward")
+    # plt.plot(V0, label="average $max_a Q(s_0)$")
+    # plt.legend()
+    # plt.show()
+
+    # s0,_ = env.reset()
+    # Vs0 = np.zeros(nb_iter)
+    # for i in range(len(Qfunctions)):
+    #     Qs0a = []
+    #     for a in range(env.action_space.n):
+    #         s0a = np.append(s0,a).reshape(1, -1)
+    #         Qs0a.append(Qfunctions[i].predict(s0a))
+    #     Vs0[i] = np.max(Qs0a)
+    # plt.plot(Vs0)
+    # plt.show()
 
     agent.load()
 
