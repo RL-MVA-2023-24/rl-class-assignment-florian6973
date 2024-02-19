@@ -84,7 +84,7 @@ class ProjectAgent:
             sa = np.append(observation,a).reshape(1, -1)
             Qsa.append(self.Q.predict(sa))
         policy = np.argmax(Qsa)
-        print(policy)
+        # print(policy)
         return policy
         # return 0
 
@@ -111,8 +111,8 @@ if __name__ == "__main__":
     agent = ProjectAgent()
 
     # training the agent
-    S, A, R, S2, D = agent.collect_samples(env, 200)
-    Qfunctions = agent.train(S, A, R, S2, D, 10, 4, 0.9)
+    S, A, R, S2, D = agent.collect_samples(env, 2000)
+    Qfunctions = agent.train(S, A, R, S2, D, 100, 4, 0.9)
     agent.Q = Qfunctions[-1]
 
     agent.save('Q.pkl')
