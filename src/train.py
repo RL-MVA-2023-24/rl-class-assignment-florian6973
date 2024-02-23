@@ -1,5 +1,5 @@
 from gymnasium.wrappers import TimeLimit
-from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from env_hiv import HIVPatient
 import numpy as np
 from tqdm import tqdm
@@ -266,6 +266,7 @@ class ProjectAgent:
                 max_Q2 = np.max(Q2,axis=1)
                 value = R + gamma*(1-D)*max_Q2 # d is one is the state is terminal
             Q = ExtraTreesRegressor(n_estimators=50, n_jobs=-1)
+            # Q = RandomForestRegressor(n_jobs=-1)
             Q.fit(SA,value)
         return Q
 
@@ -306,7 +307,7 @@ class ProjectAgent:
         # self.model.load_state_dict(torch.load('weights.pkl'))
 
 if __name__ == "__main__":
-    seed_everything(seed=42)
+    seed_everything(seed=1)
 
     # find why not deterministic
     
@@ -322,11 +323,15 @@ if __name__ == "__main__":
 
     # # training the agent
     # 400 times, 60 000 samples
+    # 29554414488.364273 with random forest, 0.15, 800, 18000
 
-    nb_iter_fitting = 400
-    nb_sample_per_it = 6000
-    for iteration in range(10):
-        random_rate = 1 if iteration == 0 else 0.15 
+    nb_iter_fitting = 600
+    nb_sample_per_it = 12000
+    best_q = None
+    best_q_val = 0
+    for iteration in range(20):
+        # random_rate = 1 if iteration == 0 else 0.15 
+        random_rate = 0.2
         S, A, R, S2, D = agent.collect_samples(env, nb_sample_per_it, random_rate=random_rate, print_reset_states=True) # reset after 200 iterations?
         # import pickle
         with open('data.pkl', 'wb') as f:
@@ -340,6 +345,14 @@ if __name__ == "__main__":
 
         score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
         print(score_agent)
+        if score_agent > best_q_val:
+            best_q_val = score_agent
+            best_q = Q
+
+    print(best_q_val)
+
+    with open(f'best_q.pkl', 'wb') as f:
+        pickle.dump(best_q, f)
 
     # # memory = agent.build_buffer(env, nb_samples=2e2, replay_buffer_size=1e2)
     # print("Building network...")
